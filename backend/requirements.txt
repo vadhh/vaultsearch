@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+langchain
+langchain-community
+langchain-core
+langchain-huggingface
+langchain-qdrant
+qdrant-client
+sentence-transformers
+pypdf
+python-multipart    

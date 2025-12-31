@@ -1,0 +1,24 @@
+# --- Dependencies ---
+node_modules/
+backend/venv/
+backend/__pycache__/
+
+# --- Next.js Build ---
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# --- Local Data (CRITICAL) ---
+qdrant_storage/
+*.vhdx
+*.db
+
+# --- Environment ---
+.env
+.env.local
+.DS_Store
+
+# --- Logs ---
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
