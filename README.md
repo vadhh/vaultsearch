@@ -6,7 +6,7 @@
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-ready-green)
 
-<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/f5664c8c-53dd-4df0-ba00-4e80d5bbca29" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/88fd5192-6ff6-4769-ac9d-f31743360091" />
 
 
 ## 🏗 Architecture
