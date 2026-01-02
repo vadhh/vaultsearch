@@ -51,7 +51,7 @@ export default function Home() {
         const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
         const res = await fetch(`${API_URL}/documents`);
         const data = await res.json();
-        // Ensure we handle the response correctly
+        // Ensure  handling response correctly
         setDocuments(data.documents || []);
     } catch (e) {
         console.error("Failed to fetch docs", e);
@@ -90,7 +90,7 @@ export default function Home() {
 
         if (response.ok) {
           setUploadStatus('✅ Ready');
-          fetchDocuments(); // Update list immediately
+          fetchDocuments(); // Update list 
         } else {
           setUploadStatus('❌ Failed');
         }
