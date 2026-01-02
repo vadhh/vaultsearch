@@ -7,7 +7,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 # --- Configuration ---
-PDF_PATH = "sample_regulation.pdf"  # We will create this file next
+PDF_PATH = "sample_regulation.pdf"  
 COLLECTION_NAME = "vault_documents"
 QDRANT_URL = "http://localhost:6333"
 
@@ -33,15 +33,15 @@ def main():
     chunks = text_splitter.split_documents(documents)
     print(f"✅ Split into {len(chunks)} text chunks.")
 
-    # 3. Initialize Embedding Model (Local)
-    # "all-MiniLM-L6-v2" is fast and effective for English technical text.
+    # 3. Initialize Embedding Model 
+    # all-MiniLM-L6-v2
     print("🔄 Loading embedding model (this downloads ~80MB on first run)...")
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
     # 4. Connect to Qdrant
     client = QdrantClient(url=QDRANT_URL)
     
-    # Create collection if it doesn't exist (optimizes for speed)
+    # Create collection if it doesn't exist
     if not client.collection_exists(COLLECTION_NAME):
         client.create_collection(
             collection_name=COLLECTION_NAME,
