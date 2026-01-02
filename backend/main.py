@@ -62,7 +62,7 @@ prompt = ChatPromptTemplate.from_template(template)
 class QueryRequest(BaseModel):
     question: str
 
-# --- ROBUST ENDPOINTS ---
+# --- ENDPOINTS ---
 
 @app.get("/documents")
 def get_documents():
@@ -71,7 +71,7 @@ def get_documents():
     Safe version: Returns empty list if collection is missing.
     """
     try:
-        # 1. Check if collection exists first!
+        # 1. Check if collection exists first
         if not client.collection_exists(COLLECTION_NAME):
             return {"documents": []}
 
@@ -97,7 +97,7 @@ def get_documents():
         return {"documents": list(unique_docs)}
     
     except Exception as e:
-        # Log the error but don't crash the client
+        # Log the error
         print(f"⚠️ Error fetching docs (returning empty list): {e}")
         return {"documents": []}
 
@@ -142,7 +142,7 @@ async def upload_document(file: UploadFile = File(...)):
         )
         chunks = text_splitter.split_documents(docs)
 
-        # Tag every single chunk with the filename
+        # Tag every single chunk
         for chunk in chunks:
             chunk.metadata["source"] = file.filename
 
