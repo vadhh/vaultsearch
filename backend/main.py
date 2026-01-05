@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,7 @@ MODEL_NAME = "llama3"
 
 app = FastAPI(title="VaultSearch API")
 
+# --- CORS & Startup ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,12 +35,17 @@ print("🚀 Initializing AI Brain...")
 
 embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 client = QdrantClient(url=QDRANT_URL)
+llm = ChatOllama(model=MODEL_NAME, base_url=OLLAMA_URL)
 
-if not client.collection_exists(COLLECTION_NAME):
-    client.create_collection(
-        collection_name=COLLECTION_NAME,
-        vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
-    )
+try:
+    if not client.collection_exists(COLLECTION_NAME):
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+        )
+    print("✅ Connected to Qdrant successfully.")
+except Exception as e:
+    print(f"⚠️ Qdrant not ready yet. Error: {e}")
 
 vectorstore = QdrantVectorStore(
     client=client,
@@ -46,7 +53,6 @@ vectorstore = QdrantVectorStore(
     embedding=embeddings,
 )
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-llm = ChatOllama(model=MODEL_NAME, base_url=OLLAMA_URL)
 
 template = """You are a strict compliance assistant. 
 Answer based ONLY on the following context. 
@@ -62,59 +68,73 @@ prompt = ChatPromptTemplate.from_template(template)
 class QueryRequest(BaseModel):
     question: str
 
-# --- ROBUST ENDPOINTS ---
+# --- ENDPOINTS ---
 
 @app.get("/documents")
 def get_documents():
-    """
-    Scans Qdrant to find all unique 'source' filenames.
-    Safe version: Returns empty list if collection is missing.
-    """
     try:
-        # 1. Check if collection exists first!
         if not client.collection_exists(COLLECTION_NAME):
             return {"documents": []}
-
+        
         unique_docs = set()
         next_offset = None
+        debug_printed = False
         
         while True:
             records, next_offset = client.scroll(
                 collection_name=COLLECTION_NAME,
-                scroll_filter=None,
                 limit=100,
                 with_payload=True,
                 offset=next_offset
             )
             
+            if not debug_printed and records:
+                print(f"🔍 RAW RECORD PAYLOAD: {records[0].payload}")
+                debug_printed = True
+
             for record in records:
-                if "source" in record.payload:
-                    unique_docs.add(record.payload["source"])
+                payload = record.payload or {}
+                source = None
+
+                if "source" in payload:
+                    source = payload["source"]
+                
+                elif "metadata" in payload and isinstance(payload["metadata"], dict):
+                     source = payload["metadata"].get("source")
+                
+                if not source:
+                    for k, v in payload.items():
+                        if isinstance(v, str) and v.lower().endswith(".pdf"):
+                            source = v
+                            break
+
+                if source:
+                    unique_docs.add(source)
             
             if next_offset is None:
                 break
                 
         return {"documents": list(unique_docs)}
-    
     except Exception as e:
-        # Log the error but don't crash the client
-        print(f"⚠️ Error fetching docs (returning empty list): {e}")
+        print(f"⚠️ Error fetching docs: {e}")
         return {"documents": []}
 
 @app.delete("/documents/{filename}")
 def delete_document(filename: str):
-    """
-    Hard Delete: Removes all vectors where metadata.source == filename
-    """
     try:
-        print(f"🗑️ Deleting all chunks for: {filename}")
+        print(f"🗑️ Attempting to delete: {filename}")
+        
         client.delete(
             collection_name=COLLECTION_NAME,
             points_selector=models.FilterSelector(
                 filter=models.Filter(
-                    must=[
+                    should=[
                         models.FieldCondition(
                             key="source",
+                            match=models.MatchValue(value=filename),
+                        ),
+                        models.FieldCondition(
+                            key="metadata.source",
                             match=models.MatchValue(value=filename),
                         ),
                     ],
@@ -123,13 +143,13 @@ def delete_document(filename: str):
         )
         return {"status": "success", "message": f"Deleted {filename}"}
     except Exception as e:
-        print(f"❌ Error deleting: {e}")
+        print(f"❌ Delete Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     try:
-        temp_file_path = f"temp_{file.filename}"
+        temp_file_path = f"temp_{int(time.time())}_{file.filename}"
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
@@ -142,7 +162,6 @@ async def upload_document(file: UploadFile = File(...)):
         )
         chunks = text_splitter.split_documents(docs)
 
-        # Tag every single chunk with the filename
         for chunk in chunks:
             chunk.metadata["source"] = file.filename
 
@@ -152,34 +171,39 @@ async def upload_document(file: UploadFile = File(...)):
         return JSONResponse(content={"status": "success", "chunks": len(chunks)})
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Upload Error: {e}")
+        if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
 async def chat_endpoint(request: QueryRequest):
-    docs = retriever.invoke(request.question)
-    context_text = "\n\n".join([doc.page_content for doc in docs])
-    
-    sources = []
-    seen_pages = set()
-    for doc in docs:
-        page = doc.metadata.get("page", "?")
-        source = doc.metadata.get("source", "Unknown")
-        identifier = f"{source} (Page {page})"
-        if identifier not in seen_pages:
-            sources.append(identifier)
-            seen_pages.add(identifier)
-
-    async def generate():
-        chain = prompt | llm
-        async for chunk in chain.astream({"context": context_text, "question": request.question}):
-            yield chunk.content
+    try:
+        docs = retriever.invoke(request.question)
+        context_text = "\n\n".join([doc.page_content for doc in docs])
         
-        if sources:
-            yield "\n\n---\n**📚 Verified Sources:**\n"
-            for src in sources:
-                yield f"- 📄 {src}\n"
-        else:
-            yield "\n\n(No specific documents found)"
+        sources = []
+        seen_pages = set()
+        for doc in docs:
+            page = doc.metadata.get("page", "?")
+            source = doc.metadata.get("source", "Unknown")
+            identifier = f"{source} (Page {page})"
+            if identifier not in seen_pages:
+                sources.append(identifier)
+                seen_pages.add(identifier)
 
-    return StreamingResponse(generate(), media_type="text/plain")
+        async def generate():
+            chain = prompt | llm
+            async for chunk in chain.astream({"context": context_text, "question": request.question}):
+                yield chunk.content
+            
+            if sources:
+                yield "\n\n---\n**📚 Verified Sources:**\n"
+                for src in sources:
+                    yield f"- 📄 {src}\n"
+            else:
+                yield "\n\n(No specific documents found)"
+
+        return StreamingResponse(generate(), media_type="text/plain")
+    except Exception as e:
+        return StreamingResponse(iter([f"Error: {e}"]), media_type="text/plain")
