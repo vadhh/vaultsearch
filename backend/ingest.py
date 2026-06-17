@@ -1,13 +1,39 @@
 import os
+import hashlib
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_qdrant import QdrantVectorStore
+from langchain_qdrant import QdrantVectorStore, RetrievalMode
+from langchain_qdrant.sparse_embeddings import SparseEmbeddings, SparseVector
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
+class HashedSparseEmbeddings(SparseEmbeddings):
+    def __init__(self, num_features: int = 1048576):
+        self.num_features = num_features
+
+    def _hash_token(self, token: str) -> int:
+        return int(hashlib.md5(token.encode('utf-8')).hexdigest(), 16) % self.num_features
+
+    def embed_documents(self, texts: list[str]) -> list[SparseVector]:
+        vectors = []
+        for text in texts:
+            tokens = [t.lower() for t in text.split() if t.isalnum()]
+            tf = {}
+            for token in tokens:
+                idx = self._hash_token(token)
+                tf[idx] = tf.get(idx, 0) + 1
+            
+            sorted_indices = sorted(tf.keys())
+            sorted_values = [float(tf[idx]) for idx in sorted_indices]
+            vectors.append(SparseVector(indices=sorted_indices, values=sorted_values))
+        return vectors
+
+    def embed_query(self, text: str) -> SparseVector:
+        return self.embed_documents([text])[0]
+
 # --- Configuration ---
-PDF_PATH = "sample_regulation.pdf"  # We will create this file next
+PDF_PATH = "sample_regulation.pdf"
 COLLECTION_NAME = "vault_documents"
 QDRANT_URL = "http://localhost:6333"
 
@@ -46,6 +72,11 @@ def main():
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE),
+            sparse_vectors_config={
+                "text-sparse": models.SparseVectorParams(
+                    index=models.SparseIndexParams(on_disk=True)
+                )
+            }
         )
         print(f"✅ Created collection '{COLLECTION_NAME}'")
 
@@ -56,6 +87,9 @@ def main():
         embeddings,
         url=QDRANT_URL,
         collection_name=COLLECTION_NAME,
+        sparse_embedding=HashedSparseEmbeddings(),
+        sparse_vector_name="text-sparse",
+        retrieval_mode=RetrievalMode.HYBRID,
         force_recreate=True # For dev only: overwrites DB each run
     )
     
